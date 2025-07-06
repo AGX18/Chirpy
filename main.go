@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/AGX18/Chirpy/internal/database"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -68,13 +69,8 @@ func main() {
 	})
 
 	serverMux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
-		type parameters struct {
-			Body   string `json:"body"`
-			UserID string `json:"user_id"`
-		}
-
 		decoder := json.NewDecoder(r.Body)
-		params := parameters{}
+		params := ChirpParams{}
 		if err := decoder.Decode(&params); err != nil {
 			respondWithError(w, 400, "Something went wrong")
 			return
@@ -86,7 +82,56 @@ func main() {
 		}
 		returnedBody := replaceProfaneWords(params.Body)
 
-		respondWithJSON(w, http.StatusOK, ReturnedBody{CleanedBody: returnedBody})
+		userUUID, err := uuid.Parse(params.UserID)
+		if err != nil {
+			fmt.Printf("Invalid UUID received: '%s', length: %d, error: %v\n", params.UserID, len(params.UserID), err)
+			respondWithError(w, 400, fmt.Sprintf("Invalid user ID format: %s", params.UserID))
+			return
+		}
+
+		createdChirp, err := apiCfg.DB.CreateChirp(r.Context(), database.CreateChirpParams{Body: returnedBody, UserID: userUUID})
+		if err != nil {
+			fmt.Printf("Failed to create chirp: %v\n", err)
+			respondWithError(w, 500, "Failed to create chirp")
+			return
+		}
+
+		respondWithJSON(w, http.StatusCreated, createdChirp)
+
+	})
+
+	serverMux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+		allChirps, err := apiCfg.DB.GetAllChirps(r.Context())
+		if err != nil {
+			fmt.Printf("Failed to get chirps: %v\n", err)
+			respondWithError(w, 500, "Failed to get chirps")
+			return
+		}
+
+		respondWithJSON(w, http.StatusOK, allChirps)
+
+	})
+
+	serverMux.HandleFunc("GET /api/chirps/{chirpID}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("chirpID")
+		chirpID, err := uuid.Parse(id)
+		if err != nil {
+			respondWithError(w, 400, "wrong chirp ID format")
+			return
+		}
+
+		chirp, err := apiCfg.DB.GetChirpByID(r.Context(), chirpID)
+		if err == sql.ErrNoRows {
+			respondWithError(w, 404, "Chirp not found")
+			return
+		}
+
+		if err != nil {
+			respondWithError(w, 500, "Failed to get chirp")
+			return
+		}
+
+		respondWithJSON(w, http.StatusOK, chirp)
 
 	})
 
