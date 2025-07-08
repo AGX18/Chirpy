@@ -114,8 +114,6 @@ func main() {
 			return
 		}
 
-		fmt.Printf("Created chirp with ID: %s\n", createdChirp.ID)
-
 		respondWithJSON(w, http.StatusCreated, Chirp{
 			ID:        createdChirp.ID,
 			CreatedAt: createdChirp.CreatedAt,
@@ -220,22 +218,36 @@ func main() {
 			return
 		}
 
-		if params.ExpiresInSeconds <= 0 {
-			params.ExpiresInSeconds = 60 * 60 // Default to 60 minutes
-		}
-
-		token, err := auth.MakeJWT(user.ID, apiCfg.JwtSecret, time.Second*time.Duration(params.ExpiresInSeconds))
+		token, err := auth.MakeJWT(user.ID, apiCfg.JwtSecret, time.Hour)
 		if err != nil {
 			respondWithError(w, 500, "Failed to create JWT token")
 			return
 		}
 
+		// make a refresh token
+		refreshToken, err := auth.MakeRefreshToken()
+		if err != nil {
+			respondWithError(w, 500, "Failed to create refresh token")
+			return
+		}
+
+		// store the refresh token in the database
+		_, err = apiCfg.DB.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+			Token:  refreshToken,
+			UserID: user.ID,
+		})
+		if err != nil {
+			respondWithError(w, 500, "Failed to store refresh token")
+			return
+		}
+
 		respondWithJSON(w, http.StatusOK, User{
-			ID:        user.ID,
-			CreatedAt: user.CreatedAt,
-			UpdatedAt: user.UpdatedAt,
-			Email:     user.Email,
-			Token:     token,
+			ID:           user.ID,
+			CreatedAt:    user.CreatedAt,
+			UpdatedAt:    user.UpdatedAt,
+			Email:        user.Email,
+			Token:        token,
+			RefreshToken: refreshToken,
 		})
 	})
 
@@ -304,9 +316,8 @@ type Error struct {
 }
 
 type UserParams struct {
-	Email            string `json:"email"`
-	Password         string `json:"password"`
-	ExpiresInSeconds int    `json:"expires_in_seconds"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type ChirpParams struct {
@@ -315,11 +326,12 @@ type ChirpParams struct {
 }
 
 type User struct {
-	ID        uuid.UUID    `json:"id"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt sql.NullTime `json:"updated_at"`
-	Email     string       `json:"email"`
-	Token     string       `json:"token"`
+	ID           uuid.UUID    `json:"id"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    sql.NullTime `json:"updated_at"`
+	Email        string       `json:"email"`
+	Token        string       `json:"token"`
+	RefreshToken string       `json:"refresh_token"`
 }
 
 type Chirp struct {
@@ -328,4 +340,13 @@ type Chirp struct {
 	UpdatedAt sql.NullTime `json:"updated_at"`
 	Body      string       `json:"body"`
 	UserID    uuid.UUID    `json:"user_id"`
+}
+
+type RefreshTokenResponse struct {
+	Token     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	UserID    uuid.UUID
+	ExpiresAt time.Time
+	RevokedAt sql.NullTime
 }

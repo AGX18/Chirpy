@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"encoding/hex"
 	"net/http"
 	"time"
+
+	"crypto/rand"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -56,4 +59,12 @@ func GetBearerToken(headers http.Header) (string, error) {
 		return "", http.ErrNoCookie
 	}
 	return httpToken[7:], nil
+}
+
+func MakeRefreshToken() (string, error) {
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	refresh_token := hex.EncodeToString(key)
+	return refresh_token, nil
 }
