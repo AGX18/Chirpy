@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"os"
 
+	"github.com/AGX18/Chirpy/internal/auth"
 	"github.com/AGX18/Chirpy/internal/database"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -18,6 +20,10 @@ import (
 
 func main() {
 	godotenv.Load()
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		panic("JWT_SECRET environment variable is not set")
+	}
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
@@ -34,6 +40,7 @@ func main() {
 		fileserverHits: atomic.Int32{},
 		DB:             dbQueries,
 		Platform:       os.Getenv("PLATFORM"),
+		JwtSecret:      jwtSecret,
 	}
 
 	serverMux.Handle("GET /admin/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,10 +89,21 @@ func main() {
 		}
 		returnedBody := replaceProfaneWords(params.Body)
 
-		userUUID, err := uuid.Parse(params.UserID)
+		// userUUID, err := uuid.Parse(params.UserID)
+		// if err != nil {
+		// 	fmt.Printf("Invalid UUID received: '%s', length: %d, error: %v\n", params.UserID, len(params.UserID), err)
+		// 	respondWithError(w, 400, fmt.Sprintf("Invalid user ID format: %s", params.UserID))
+		// 	return
+		// }
+
+		GetBearerToken, err := auth.GetBearerToken(r.Header)
 		if err != nil {
-			fmt.Printf("Invalid UUID received: '%s', length: %d, error: %v\n", params.UserID, len(params.UserID), err)
-			respondWithError(w, 400, fmt.Sprintf("Invalid user ID format: %s", params.UserID))
+			respondWithError(w, 401, "Wrong or missing authorization token")
+			return
+		}
+		userUUID, err := auth.ValidateJWT(GetBearerToken, apiCfg.JwtSecret)
+		if err != nil {
+			respondWithError(w, 401, "Invalid or expired token")
 			return
 		}
 
@@ -96,7 +114,15 @@ func main() {
 			return
 		}
 
-		respondWithJSON(w, http.StatusCreated, createdChirp)
+		fmt.Printf("Created chirp with ID: %s\n", createdChirp.ID)
+
+		respondWithJSON(w, http.StatusCreated, Chirp{
+			ID:        createdChirp.ID,
+			CreatedAt: createdChirp.CreatedAt,
+			UpdatedAt: createdChirp.UpdatedAt,
+			Body:      createdChirp.Body,
+			UserID:    createdChirp.UserID,
+		})
 
 	})
 
@@ -131,7 +157,13 @@ func main() {
 			return
 		}
 
-		respondWithJSON(w, http.StatusOK, chirp)
+		respondWithJSON(w, http.StatusOK, Chirp{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt,
+			UpdatedAt: chirp.UpdatedAt,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		})
 
 	})
 
@@ -143,13 +175,68 @@ func main() {
 			return
 		}
 
-		createdUser, err := apiCfg.DB.CreateUser(r.Context(), params.Email)
+		hashedPassword, err := auth.HashPassword(params.Password)
+		if err != nil {
+			respondWithError(w, 500, "Failed to hash password")
+			return
+		}
+
+		createdUser, err := apiCfg.DB.CreateUser(r.Context(), database.CreateUserParams{Email: params.Email, HashedPassword: hashedPassword})
 		if err != nil {
 			respondWithError(w, 500, "Failed to create user")
 			return
 		}
 
-		respondWithJSON(w, http.StatusCreated, createdUser)
+		respondWithJSON(w, http.StatusCreated, User{
+			ID:        createdUser.ID,
+			CreatedAt: createdUser.CreatedAt,
+			UpdatedAt: createdUser.UpdatedAt,
+			Email:     createdUser.Email,
+		})
+	})
+
+	// This endpoint should allow a user to login.
+	// TODO: give the user a token that they can use to make authenticated requests.
+	serverMux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		decoder := json.NewDecoder(r.Body)
+		params := UserParams{}
+		if err := decoder.Decode(&params); err != nil {
+			respondWithError(w, 400, "Invalid request body")
+			return
+		}
+
+		user, err := apiCfg.DB.GetUserByEmail(r.Context(), params.Email)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				respondWithError(w, 404, "User not found")
+				return
+			}
+			respondWithError(w, 500, "Failed to get user")
+			return
+		}
+
+		if err := auth.CheckPasswordHash(params.Password, user.HashedPassword); err != nil {
+			respondWithError(w, 401, "Incorrect email or password")
+			return
+		}
+
+		if params.ExpiresInSeconds <= 0 {
+			params.ExpiresInSeconds = 60 * 60 // Default to 60 minutes
+		}
+
+		token, err := auth.MakeJWT(user.ID, apiCfg.JwtSecret, time.Second*time.Duration(params.ExpiresInSeconds))
+		if err != nil {
+			respondWithError(w, 500, "Failed to create JWT token")
+			return
+		}
+
+		respondWithJSON(w, http.StatusOK, User{
+			ID:        user.ID,
+			CreatedAt: user.CreatedAt,
+			UpdatedAt: user.UpdatedAt,
+			Email:     user.Email,
+			Token:     token,
+		})
 	})
 
 	server.ListenAndServe()
@@ -172,7 +259,7 @@ func replaceProfaneWords(text string) string {
 	return strings.Join(words, " ")
 }
 
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+func respondWithJSON(w http.ResponseWriter, code int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	err := json.NewEncoder(w).Encode(payload)
@@ -192,6 +279,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	DB             *database.Queries
 	Platform       string
+	JwtSecret      string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -216,10 +304,28 @@ type Error struct {
 }
 
 type UserParams struct {
-	Email string `json:"email"`
+	Email            string `json:"email"`
+	Password         string `json:"password"`
+	ExpiresInSeconds int    `json:"expires_in_seconds"`
 }
 
 type ChirpParams struct {
 	Body   string `json:"body"`
 	UserID string `json:"user_id"`
+}
+
+type User struct {
+	ID        uuid.UUID    `json:"id"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt sql.NullTime `json:"updated_at"`
+	Email     string       `json:"email"`
+	Token     string       `json:"token"`
+}
+
+type Chirp struct {
+	ID        uuid.UUID    `json:"id"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt sql.NullTime `json:"updated_at"`
+	Body      string       `json:"body"`
+	UserID    uuid.UUID    `json:"user_id"`
 }
