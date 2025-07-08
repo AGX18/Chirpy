@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/google/uuid"
 )
@@ -43,13 +44,13 @@ func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshToken
 	return i, err
 }
 
-const validateRefreshToken = `-- name: ValidateRefreshToken :one
+const getUserFromRefreshToken = `-- name: GetUserFromRefreshToken :one
 SELECT token, created_at, updated_at, user_id, expires_at, revoked_at FROM refresh_tokens
 WHERE token = $1
 `
 
-func (q *Queries) ValidateRefreshToken(ctx context.Context, token string) (RefreshToken, error) {
-	row := q.db.QueryRowContext(ctx, validateRefreshToken, token)
+func (q *Queries) GetUserFromRefreshToken(ctx context.Context, token string) (RefreshToken, error) {
+	row := q.db.QueryRowContext(ctx, getUserFromRefreshToken, token)
 	var i RefreshToken
 	err := row.Scan(
 		&i.Token,
@@ -60,4 +61,15 @@ func (q *Queries) ValidateRefreshToken(ctx context.Context, token string) (Refre
 		&i.RevokedAt,
 	)
 	return i, err
+}
+
+const revokeRefreshToken = `-- name: RevokeRefreshToken :execresult
+UPDATE refresh_tokens
+SET revoked_at = NOW(),
+    updated_at = NOW()
+WHERE token = $1
+`
+
+func (q *Queries) RevokeRefreshToken(ctx context.Context, token string) (sql.Result, error) {
+	return q.db.ExecContext(ctx, revokeRefreshToken, token)
 }

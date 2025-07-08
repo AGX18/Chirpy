@@ -251,6 +251,69 @@ func main() {
 		})
 	})
 
+	serverMux.HandleFunc("POST /api/refresh", func(w http.ResponseWriter, r *http.Request) {
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "Missing or invalid authorization token")
+			return
+		}
+		refreshToken, err := apiCfg.DB.GetUserFromRefreshToken(r.Context(), token)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				respondWithError(w, 401, "Refresh token not found or expired")
+				return
+			}
+			respondWithError(w, 500, "Failed to validate refresh token")
+			return
+		}
+
+		if refreshToken.RevokedAt.Valid {
+			respondWithError(w, 401, "Refresh token has been revoked")
+			return
+		}
+
+		accessToken, err := auth.MakeJWT(refreshToken.UserID, apiCfg.JwtSecret, time.Hour)
+		if err != nil {
+			respondWithError(w, 500, "Failed to create access token")
+			return
+		}
+
+		respondWithJSON(w, http.StatusOK, AccessTokenResponse{
+			Token: accessToken,
+		})
+
+	})
+
+	serverMux.HandleFunc("POST /api/revoke", func(w http.ResponseWriter, r *http.Request) {
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "Missing or invalid authorization token")
+			return
+		}
+
+		// revoke the refresh token by setting the revoked_at field to the current time
+		result, err := apiCfg.DB.RevokeRefreshToken(r.Context(), token)
+
+		if err != nil {
+			respondWithError(w, 500, "Failed to revoke refresh token")
+			return
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			respondWithError(w, 500, "Internal server error")
+			return
+		}
+
+		if rowsAffected == 0 {
+			respondWithError(w, 404, "Refresh token not found")
+			return
+		}
+
+		respondWithJSON(w, 204, nil)
+
+	})
+
 	server.ListenAndServe()
 
 }
@@ -274,6 +337,9 @@ func replaceProfaneWords(text string) string {
 func respondWithJSON(w http.ResponseWriter, code int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
+	if payload == nil {
+		return
+	}
 	err := json.NewEncoder(w).Encode(payload)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
@@ -349,4 +415,8 @@ type RefreshTokenResponse struct {
 	UserID    uuid.UUID
 	ExpiresAt time.Time
 	RevokedAt sql.NullTime
+}
+
+type AccessTokenResponse struct {
+	Token string `json:"token"`
 }

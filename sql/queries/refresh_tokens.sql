@@ -1,4 +1,4 @@
--- name: ValidateRefreshToken :one
+-- name: GetUserFromRefreshToken :one
 SELECT * FROM refresh_tokens
 WHERE token = $1;
 
@@ -13,3 +13,9 @@ VALUES (
     NULL
 )
 RETURNING *;
+
+-- name: RevokeRefreshToken :execresult 
+UPDATE refresh_tokens
+SET revoked_at = NOW(),
+    updated_at = NOW()
+WHERE token = $1;
