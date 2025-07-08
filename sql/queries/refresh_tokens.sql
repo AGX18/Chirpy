@@ -1,6 +1,6 @@
--- name: GetRefreshToken :one
+-- name: ValidateRefreshToken :one
 SELECT * FROM refresh_tokens
-WHERE user_id = $1;
+WHERE token = $1;
 
 -- name: CreateRefreshToken :one
 INSERT INTO refresh_tokens (token, created_at, updated_at, user_id, expires_at, revoked_at)
