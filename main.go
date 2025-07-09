@@ -314,6 +314,50 @@ func main() {
 
 	})
 
+	serverMux.HandleFunc("PUT /api/users", func(w http.ResponseWriter, r *http.Request) {
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "Missing or invalid authorization token")
+			return
+		}
+
+		id, err := auth.ValidateJWT(token, apiCfg.JwtSecret)
+		if err != nil {
+			respondWithError(w, 401, "invalid or revoked Token")
+			return
+		}
+
+		// contains new password and email
+		userParams := UserParams{}
+		err = json.NewDecoder(r.Body).Decode(&userParams)
+		if err != nil {
+			respondWithError(w, 500, "internal server error")
+		}
+
+		hashedPassword, err := auth.HashPassword(userParams.Password)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "internal server error")
+		}
+
+		updatedUser, err := apiCfg.DB.UpdateEmailAndPassword(r.Context(), database.UpdateEmailAndPasswordParams{
+			Email:          userParams.Email,
+			HashedPassword: hashedPassword,
+			ID:             id,
+		})
+
+		if err != nil {
+			respondWithError(w, 500, "internal server error")
+		}
+
+		respondWithJSON(w, http.StatusOK, User{
+			ID:        updatedUser.ID,
+			CreatedAt: updatedUser.CreatedAt,
+			UpdatedAt: updatedUser.UpdatedAt,
+			Email:     updatedUser.Email,
+		})
+
+	})
+
 	server.ListenAndServe()
 
 }
