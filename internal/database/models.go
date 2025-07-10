@@ -12,11 +12,11 @@ import (
 )
 
 type Chirp struct {
-	ID        uuid.UUID
-	CreatedAt time.Time
-	UpdatedAt sql.NullTime
-	Body      string
-	UserID    uuid.UUID
+	ID        uuid.UUID    `json:"id"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt sql.NullTime `json:"updated_at"`
+	Body      string       `json:"body"`
+	UserID    uuid.UUID    `json:"user_id"`
 }
 
 type RefreshToken struct {

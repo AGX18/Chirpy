@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -152,6 +153,16 @@ func main() {
 			return
 		}
 
+		// optional sorting by created_at asc or desc
+		// this is not implemented in the database, so we will sort it in memory
+		// asc is the default sorting and it's done by the database
+		sorting := r.URL.Query().Get("sort")
+
+		if sorting == "desc" {
+			sort.Slice(allChirps, func(i, j int) bool {
+				return allChirps[i].CreatedAt.After(allChirps[j].CreatedAt)
+			})
+		}
 		respondWithJSON(w, http.StatusOK, allChirps)
 
 	})
