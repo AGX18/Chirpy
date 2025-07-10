@@ -358,6 +358,61 @@ func main() {
 
 	})
 
+	// deletes a chirp from the database by its id.
+	serverMux.HandleFunc("DELETE /api/chirps/{chirpID}", func(w http.ResponseWriter, r *http.Request) {
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "Missing or invalid authorization token")
+			return
+		}
+
+		chirpIDString := r.PathValue("chirpID")
+
+		if chirpIDString == "" {
+			respondWithError(w, http.StatusBadRequest, "Invalid Request")
+			return
+		}
+
+		chirpID, err := uuid.Parse(chirpIDString)
+		if err != nil {
+			respondWithError(w, 400, "wrong chirp ID format")
+			return
+		}
+
+		userID, err := auth.ValidateJWT(token, apiCfg.JwtSecret)
+		if err != nil {
+			respondWithError(w, 401, "invalid or revoked Token")
+			return
+		}
+
+		// get the chirp and check if the ids match
+
+		chirp, err := apiCfg.DB.GetChirpByID(r.Context(), chirpID)
+
+		if err != nil {
+			if err == sql.ErrNoRows {
+				respondWithError(w, http.StatusNotFound, "Chirp not found")
+				return
+			}
+			respondWithError(w, 500, "internal server error")
+			return
+		}
+
+		if chirp.UserID != userID {
+			respondWithError(w, 403, "Unauthorized")
+			return
+		}
+
+		err = apiCfg.DB.DeleteChirpByID(r.Context(), chirpID)
+
+		if err != nil {
+			respondWithError(w, 500, "internal server error: could not delete chirp")
+			return
+		}
+		respondWithJSON(w, 204, nil)
+
+	})
+
 	server.ListenAndServe()
 
 }
