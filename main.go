@@ -21,6 +21,7 @@ import (
 func main() {
 	godotenv.Load()
 	jwtSecret := os.Getenv("JWT_SECRET")
+	POLKA_KEY := os.Getenv("POLKA_KEY")
 	if jwtSecret == "" {
 		panic("JWT_SECRET environment variable is not set")
 	}
@@ -41,6 +42,7 @@ func main() {
 		DB:             dbQueries,
 		Platform:       os.Getenv("PLATFORM"),
 		JwtSecret:      jwtSecret,
+		POLKA_KEY:      POLKA_KEY,
 	}
 
 	serverMux.Handle("GET /admin/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -186,10 +188,11 @@ func main() {
 		}
 
 		respondWithJSON(w, http.StatusCreated, User{
-			ID:        createdUser.ID,
-			CreatedAt: createdUser.CreatedAt,
-			UpdatedAt: createdUser.UpdatedAt,
-			Email:     createdUser.Email,
+			ID:          createdUser.ID,
+			CreatedAt:   createdUser.CreatedAt,
+			UpdatedAt:   createdUser.UpdatedAt,
+			Email:       createdUser.Email,
+			IsChirpyRed: createdUser.IsChirpyRed,
 		})
 	})
 
@@ -248,6 +251,7 @@ func main() {
 			Email:        user.Email,
 			Token:        token,
 			RefreshToken: refreshToken,
+			IsChirpyRed:  user.IsChirpyRed,
 		})
 	})
 
@@ -350,10 +354,11 @@ func main() {
 		}
 
 		respondWithJSON(w, http.StatusOK, User{
-			ID:        updatedUser.ID,
-			CreatedAt: updatedUser.CreatedAt,
-			UpdatedAt: updatedUser.UpdatedAt,
-			Email:     updatedUser.Email,
+			ID:          updatedUser.ID,
+			CreatedAt:   updatedUser.CreatedAt,
+			UpdatedAt:   updatedUser.UpdatedAt,
+			Email:       updatedUser.Email,
+			IsChirpyRed: updatedUser.IsChirpyRed,
 		})
 
 	})
@@ -413,6 +418,43 @@ func main() {
 
 	})
 
+	serverMux.HandleFunc("POST /api/polka/webhooks", func(w http.ResponseWriter, r *http.Request) {
+		PolkaKey, err := auth.GetAPIKey(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "Missing or invalid API key")
+			return
+		}
+
+		if PolkaKey != apiCfg.POLKA_KEY {
+			respondWithError(w, 401, "Forbidden: Invalid API key")
+			return
+		}
+		var chirpRequest ChirpRequest
+		if err := json.NewDecoder(r.Body).Decode(&chirpRequest); err != nil {
+			respondWithError(w, 400, "Invalid request body")
+			return
+		}
+
+		if chirpRequest.Event != "user.upgraded" {
+			respondWithJSON(w, 204, nil)
+			return
+		}
+
+		_, err = apiCfg.DB.MakeUserChirpyRed(r.Context(), chirpRequest.Data.UserID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				respondWithError(w, 404, "User not found")
+				return
+			}
+			// Log the error for debugging purposes
+			fmt.Printf("Failed to make user chirpy red: %v\n", err)
+			respondWithError(w, 500, "Failed to make user chirpy red")
+			return
+		}
+
+		respondWithJSON(w, 204, nil)
+	})
+
 	server.ListenAndServe()
 
 }
@@ -435,15 +477,12 @@ func replaceProfaneWords(text string) string {
 
 func respondWithJSON(w http.ResponseWriter, code int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
 	if payload == nil {
+		w.WriteHeader(code)
 		return
 	}
-	err := json.NewEncoder(w).Encode(payload)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
-		return
-	}
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(payload)
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
@@ -457,6 +496,7 @@ type apiConfig struct {
 	DB             *database.Queries
 	Platform       string
 	JwtSecret      string
+	POLKA_KEY      string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -497,6 +537,7 @@ type User struct {
 	Email        string       `json:"email"`
 	Token        string       `json:"token"`
 	RefreshToken string       `json:"refresh_token"`
+	IsChirpyRed  bool         `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -518,4 +559,11 @@ type RefreshTokenResponse struct {
 
 type AccessTokenResponse struct {
 	Token string `json:"token"`
+}
+
+type ChirpRequest struct {
+	Event string `json:"event"`
+	Data  struct {
+		UserID uuid.UUID `json:"user_id"`
+	} `json:"data"`
 }

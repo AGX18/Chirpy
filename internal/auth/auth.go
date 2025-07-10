@@ -68,3 +68,17 @@ func MakeRefreshToken() (string, error) {
 	refresh_token := hex.EncodeToString(key)
 	return refresh_token, nil
 }
+
+func GetAPIKey(headers http.Header) (string, error) {
+	PolkaKey := headers.Get("Authorization")
+
+	if PolkaKey == "" {
+		return "", http.ErrNoCookie
+	}
+
+	if len(PolkaKey) < 7 || PolkaKey[:7] != "ApiKey " {
+		return "", http.ErrNoCookie
+	}
+
+	return PolkaKey[7:], nil
+}
