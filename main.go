@@ -127,7 +127,25 @@ func main() {
 	})
 
 	serverMux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
-		allChirps, err := apiCfg.DB.GetAllChirps(r.Context())
+		authorID := r.URL.Query().Get("author_id")
+
+		var allChirps []database.Chirp
+		var err error
+		if authorID != "" {
+			authorUUID, err := uuid.Parse(authorID)
+			if err != nil {
+				respondWithError(w, 400, "Invalid author ID format")
+				return
+			}
+			allChirps, err = apiCfg.DB.GetAllChirpsByAuthor(r.Context(), authorUUID)
+			if err == sql.ErrNoRows {
+				respondWithError(w, 404, "No chirps found for this author")
+				return
+			}
+		} else {
+			allChirps, err = apiCfg.DB.GetAllChirps(r.Context())
+		}
+
 		if err != nil {
 			fmt.Printf("Failed to get chirps: %v\n", err)
 			respondWithError(w, 500, "Failed to get chirps")
